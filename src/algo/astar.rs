@@ -15,6 +15,10 @@ use crate::algo::Measure;
 /// `finish` is implicitly given via the `is_goal` callback, which should return `true` if the
 /// given node is the finish node.
 ///
+/// The function `constraints_satisfied` should return `true` if an edge should be included
+/// in the shortest path computation (i.e. when it satisfies some set of constraints defined
+/// by the function), otherwise it returns `false` and the edge is excluded.
+///
 /// The function `edge_cost` should return the cost for a particular edge. Edge costs must be
 /// non-negative.
 ///
@@ -63,10 +67,11 @@ use crate::algo::Measure;
 ///
 /// Returns the total cost + the path of subsequent `NodeId` from start to finish, if one was
 /// found.
-pub fn astar<G, F, H, K, IsGoal>(
+pub fn castar<G, C, F, H, K, IsGoal>(
     graph: G,
     start: G::NodeId,
     mut is_goal: IsGoal,
+    mut constraints_satisfied: C,
     mut edge_cost: F,
     mut estimate_cost: H,
 ) -> Option<(K, Vec<G::NodeId>)>
@@ -74,6 +79,7 @@ where
     G: IntoEdges + Visitable,
     IsGoal: FnMut(G::NodeId) -> bool,
     G::NodeId: Eq + Hash,
+    C: FnMut(G::EdgeRef) -> bool,
     F: FnMut(G::EdgeRef) -> K,
     H: FnMut(G::NodeId) -> K,
     K: Measure + Copy,
@@ -113,30 +119,50 @@ where
         }
 
         for edge in graph.edges(node) {
-            let next = edge.target();
-            let next_score = node_score + edge_cost(edge);
+            if constraints_satisfied(edge.clone()) {
+                let next = edge.target();
+                let next_score = node_score + edge_cost(edge);
 
-            match scores.entry(next) {
-                Occupied(mut entry) => {
-                    // No need to add neighbors that we have already reached through a shorter path
-                    // than now.
-                    if *entry.get() <= next_score {
-                        continue;
+                match scores.entry(next) {
+                    Occupied(mut entry) => {
+                        // No need to add neighbors that we have already reached through a shorter path
+                        // than now.
+                        if *entry.get() <= next_score {
+                            continue;
+                        }
+                        entry.insert(next_score);
                     }
-                    entry.insert(next_score);
+                    Vacant(entry) => {
+                        entry.insert(next_score);
+                    }
                 }
-                Vacant(entry) => {
-                    entry.insert(next_score);
-                }
-            }
 
-            path_tracker.set_predecessor(next, node);
-            let next_estimate_score = next_score + estimate_cost(next);
-            visit_next.push(MinScored(next_estimate_score, next));
+                path_tracker.set_predecessor(next, node);
+                let next_estimate_score = next_score + estimate_cost(next);
+                visit_next.push(MinScored(next_estimate_score, next));
+            }
         }
     }
 
     None
+}
+
+pub fn astar<G, F, H, K, IsGoal>(
+    graph: G,
+    start: G::NodeId,
+    mut is_goal: IsGoal,
+    mut edge_cost: F,
+    mut estimate_cost: H,
+) -> Option<(K, Vec<G::NodeId>)>
+where
+    G: IntoEdges + Visitable,
+    IsGoal: FnMut(G::NodeId) -> bool,
+    G::NodeId: Eq + Hash,
+    F: FnMut(G::EdgeRef) -> K,
+    H: FnMut(G::NodeId) -> K,
+    K: Measure + Copy,
+{
+    return castar(graph, start, is_goal, |_| true, edge_cost, estimate_cost);
 }
 
 struct PathTracker<G>
